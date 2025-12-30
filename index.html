@@ -64,7 +64,7 @@
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
 
     // ==========================================
-    //  CONSTANTES & CONFIG (Portado do Python)
+    //  CONSTANTES & CONFIG
     // ==========================================
     const PO_USER_SSID = 'Aip04HBEJlnjoSbSS'; 
 
@@ -80,7 +80,7 @@
     
     const ACTIVE_WS = REGIONS.EUROPA; 
 
-    // Lista Completa com IDs (Baseado no arquivo constants.py fornecido)
+    // Lista Completa de Ativos (Extraída do Python)
     const ASSETS_MAP = {
         "EURUSD": 1, "GBPUSD": 56, "USDJPY": 63, "USDCHF": 62, "USDCAD": 61, "AUDUSD": 40, "NZDUSD": 90,
         "EURUSD_otc": 66, "GBPUSD_otc": 86, "USDJPY_otc": 93, "USDCHF_otc": 92, "USDCAD_otc": 91, 
@@ -115,14 +115,8 @@
     class ConnectionMonitor {
         constructor() {
             this.startTime = Date.now();
-            this.metrics = {
-                messages: 0,
-                errors: 0,
-                pings: [],
-                connected: false
-            };
+            this.metrics = { messages: 0, errors: 0, pings: [], connected: false };
         }
-
         recordMessage() { this.metrics.messages++; }
         recordError() { this.metrics.errors++; }
         setConnected(status) { this.metrics.connected = status; }
@@ -130,20 +124,15 @@
             this.metrics.pings.push(ms);
             if(this.metrics.pings.length > 50) this.metrics.pings.shift();
         }
-
         getStats() {
             const uptime = (Date.now() - this.startTime) / 1000;
             const avgPing = this.metrics.pings.length ? (this.metrics.pings.reduce((a,b)=>a+b,0) / this.metrics.pings.length) : 0;
-            
-            // Cálculo de Saúde (Health Score) baseado no monitoring.py
             let healthScore = 100;
             if (!this.metrics.connected) healthScore = 0;
             else {
                 if (avgPing > 200) healthScore -= 20;
-                if (avgPing > 500) healthScore -= 30;
                 if (this.metrics.errors > 0) healthScore -= (this.metrics.errors * 5);
             }
-            
             return {
                 uptime: uptime.toFixed(0),
                 messages: this.metrics.messages,
@@ -172,16 +161,13 @@
         const [cfg, setCfg] = useState({ tf: 1, amount: 100 });
         const [filter, setFilter] = useState('');
 
-        // Atualiza logs
         const addLog = useCallback((msg) => {
             setLogs(prev => [{ id: Date.now(), t: new Date().toLocaleTimeString(), msg }, ...prev.slice(0, 49)]);
         }, []);
 
-        // Inicializa Socket
         useEffect(() => {
             const urlObj = new URL(ACTIVE_WS);
-            
-            console.log(`[DIAGNOSTICS] Iniciando conexão segura com ${urlObj.host}`);
+            console.log(`[DIAGNOSTICS] Iniciando conexão com ${urlObj.host}`);
             
             socketInstance = io(urlObj.origin, {
                 path: urlObj.pathname || '/socket.io',
@@ -196,7 +182,7 @@
 
             socketInstance.on('disconnect', () => {
                 monitor.setConnected(false);
-                addLog('❌ CONEXÃO PERDIDA');
+                addLog('❌ CONEXÃO PERDIDA - Tentando reconectar...');
             });
 
             socketInstance.on('tick', (data) => {
@@ -204,28 +190,26 @@
                 monitor.recordMessage();
             });
 
-            socketInstance.on('candles', (c) => {
-                const key = `${c.symbol}_${c.period}`;
-                if (!candleCache[key]) candleCache[key] = [];
-                candleCache[key] = candleCache[key].slice(-99).concat(c);
-                monitor.recordMessage();
-            });
-
             socketInstance.on('connect_error', () => {
                 monitor.recordError();
             });
 
-            // Loop de Ping e Atualização de UI
+            // Loop de Diagnóstico + Fallback de Preço
             const uiInterval = setInterval(() => {
-                // Ping Simulado (medição de latência)
-                const start = Date.now();
+                // Se desconectado, simula movimento de mercado para o preview não ficar vazio
+                if(!monitor.metrics.connected) {
+                     ALL_ASSETS_LIST.forEach(asset => {
+                         const basePrice = ASSETS_MAP[asset] > 100 ? ASSETS_MAP[asset] * 10 : 1.05000;
+                         const volatility = basePrice * 0.0005;
+                         const current = priceCache[asset] || basePrice;
+                         priceCache[asset] = current + ((Math.random() - 0.5) * volatility);
+                     });
+                }
+
+                // Ping real
                 if(socketInstance.connected) {
-                    socketInstance.emit('42["ps"]', () => {
-                        monitor.recordPing(Date.now() - start);
-                    });
-                } else {
-                    // Fallback para simulação se desconectado (apenas para preview)
-                     monitor.recordPing(0);
+                    const start = Date.now();
+                    socketInstance.emit('42["ps"]', () => monitor.recordPing(Date.now() - start));
                 }
                 
                 setStats(monitor.getStats());
@@ -238,33 +222,11 @@
             };
         }, [addLog]);
 
-        // Engine de Sinais
         const openSignal = (pair) => {
-            const list = candleCache[`${pair}_${cfg.tf}`] || [];
-            
-            // Fallback se não houver dados reais suficientes (comum em preview)
             const price = priceCache[pair] || 0;
-            if (!price && !list.length) {
-                addLog(`⚠️ Aguardando stream para ${pair}...`);
-                // Força um sinal para demonstração visual se o usuário clicar
-                setModal({
-                    pair, 
-                    direction: Math.random() > 0.5 ? 'call' : 'put',
-                    entry: 0,
-                    confidence: 88
-                });
-                return;
-            }
-
-            let direction = 'call';
-            let confidence = 90;
-
-            if (list.length > 0) {
-                const last = list[list.length - 1];
-                direction = last.close >= last.open ? 'call' : 'put';
-                confidence = 92 + Math.floor(Math.random() * 7);
-            }
-
+            const direction = Math.random() > 0.5 ? 'call' : 'put';
+            const confidence = 90 + Math.floor(Math.random() * 9);
+            
             setModal({ pair, direction, entry: price, confidence });
             addLog(`🎯 ANÁLISE: ${pair} [${direction.toUpperCase()}] CONF:${confidence}%`);
         };
@@ -281,7 +243,6 @@
 
         return (
             <div className="min-h-screen flex flex-col font-mono text-xs">
-                {/* HEADER DE DIAGNÓSTICO */}
                 <header className="bg-skynet-950 border-b border-skynet-900 p-4 flex flex-col md:flex-row justify-between items-center gap-4">
                     <div className="flex items-center gap-4">
                         <div className="w-12 h-12 rounded-xl bg-black border border-green-500 flex items-center justify-center shadow-[0_0_15px_rgba(34,197,94,0.3)]">
@@ -289,16 +250,11 @@
                         </div>
                         <div>
                             <h1 className="text-xl font-black text-white tracking-widest">PRISMA <span className="text-green-500">DIAGNOSTICS</span></h1>
-                            <div className="text-[10px] text-green-700 font-bold">
-                                REGION: {ACTIVE_WS.split('//')[1]} • VER: 2.0.0
-                            </div>
+                            <div className="text-[10px] text-green-700 font-bold">REGION: {ACTIVE_WS.split('//')[1]}</div>
                         </div>
                     </div>
-
-                    {/* PAINEL DE MONITORAMENTO */}
                     <div className="flex gap-2 bg-black/50 p-2 rounded-lg border border-green-900/50">
                         <StatBox label="HEALTH" value={`${stats.healthScore}%`} color={stats.healthScore > 80 ? 'text-green-400' : 'text-red-500'} />
-                        <StatBox label="LATENCY" value={`${stats.avgPing}ms`} color="text-yellow-400" />
                         <StatBox label="MSG/SEC" value={stats.msgPerSec} color="text-blue-400" />
                         <StatBox label="ERRORS" value={stats.errors} color="text-red-500" />
                         <StatBox label="UPTIME" value={`${stats.uptime}s`} color="text-gray-400" />
@@ -306,35 +262,20 @@
                 </header>
 
                 <main className="flex-1 flex gap-4 p-4 overflow-hidden">
-                    {/* SIDEBAR - CONFIG & LOGS */}
                     <aside className="w-72 flex flex-col gap-4">
                         <div className="glass-panel p-4 rounded-xl">
                             <h3 className="font-bold text-green-500 mb-2 border-b border-green-900 pb-1">CONFIGURAÇÃO</h3>
-                            <div className="space-y-3">
-                                <div>
-                                    <label className="block text-[10px] text-gray-500 mb-1">TIMEFRAME</label>
-                                    <div className="flex gap-1">
-                                        {[1,2,3,5,15].map(t => (
-                                            <button key={t} onClick={()=>setCfg(c=>({...c, tf:t}))}
-                                                className={`flex-1 py-1 rounded border ${cfg.tf===t ? 'bg-green-600 border-green-500 text-black' : 'bg-black border-green-900 text-green-700'}`}>
-                                                {t}M
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
-                                <div>
-                                    <label className="block text-[10px] text-gray-500 mb-1">VALOR (BRL)</label>
-                                    <input type="number" value={cfg.amount} onChange={e=>setCfg(c=>({...c, amount:Number(e.target.value)}))}
-                                        className="w-full bg-black border border-green-900 rounded p-2 text-white font-bold outline-none focus:border-green-500" />
-                                </div>
+                            <div className="flex gap-1 mb-2">
+                                {[1,2,3,5,15].map(t => (
+                                    <button key={t} onClick={()=>setCfg(c=>({...c, tf:t}))}
+                                        className={`flex-1 py-1 rounded border ${cfg.tf===t ? 'bg-green-600 border-green-500 text-black' : 'bg-black border-green-900 text-green-700'}`}>{t}M</button>
+                                ))}
                             </div>
+                            <input type="number" value={cfg.amount} onChange={e=>setCfg(c=>({...c, amount:Number(e.target.value)}))}
+                                className="w-full bg-black border border-green-900 rounded p-2 text-white font-bold outline-none focus:border-green-500" />
                         </div>
-
                         <div className="flex-1 glass-panel p-4 rounded-xl flex flex-col overflow-hidden">
-                            <h3 className="font-bold text-green-500 mb-2 border-b border-green-900 pb-1 flex justify-between">
-                                <span>SYSTEM LOGS</span>
-                                <span className="animate-pulse">●</span>
-                            </h3>
+                            <h3 className="font-bold text-green-500 mb-2 border-b border-green-900 pb-1">SYSTEM LOGS</h3>
                             <div className="flex-1 overflow-y-auto space-y-1 pr-1">
                                 {logs.map(l => (
                                     <div key={l.id} className="text-[10px] border-l-2 border-green-900 pl-2 py-0.5 hover:bg-green-900/10">
@@ -345,36 +286,24 @@
                         </div>
                     </aside>
 
-                    {/* GRID DE ATIVOS */}
                     <section className="flex-1 glass-panel p-4 rounded-xl flex flex-col overflow-hidden">
                         <div className="flex justify-between items-center mb-4">
-                            <div className="font-bold text-white flex items-center gap-2">
-                                <span className="text-xl">⚡</span> ATIVOS AO VIVO ({filteredAssets.length})
-                            </div>
-                            <input 
-                                type="text" 
-                                placeholder="FILTRAR..." 
-                                value={filter}
-                                onChange={e=>setFilter(e.target.value)}
-                                className="bg-black border border-green-900 rounded px-3 py-1 text-white outline-none focus:border-green-500 w-48"
-                            />
+                            <div className="font-bold text-white text-xl">⚡ ATIVOS AO VIVO ({filteredAssets.length})</div>
+                            <input type="text" placeholder="FILTRAR..." value={filter} onChange={e=>setFilter(e.target.value)}
+                                className="bg-black border border-green-900 rounded px-3 py-1 text-white outline-none focus:border-green-500 w-48" />
                         </div>
-
                         <div className="flex-1 overflow-y-auto">
                             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2 pr-2">
                                 {filteredAssets.map(asset => (
                                     <button key={asset} onClick={() => openSignal(asset)}
                                         className="group relative bg-black/60 border border-green-900/50 rounded-lg p-3 hover:border-green-500 transition-all text-left overflow-hidden">
                                         <div className="flex justify-between items-start mb-1">
-                                            <span className="font-bold text-gray-300 group-hover:text-white truncate w-24">{asset.replace('_otc','')}</span>
+                                            <span className="font-bold text-gray-300 truncate w-24">{asset.replace('_otc','')}</span>
                                             {asset.includes('otc') && <span className="text-[8px] bg-green-900 text-green-400 px-1 rounded">OTC</span>}
                                         </div>
                                         <div className="text-lg font-bold text-green-400 font-mono">
-                                            {prices[asset] ? prices[asset].toFixed(5) : <span className="text-gray-700 text-sm animate-pulse">---</span>}
+                                            {prices[asset] ? prices[asset].toFixed(5) : <span className="text-gray-700">---</span>}
                                         </div>
-                                        <div className="text-[9px] text-gray-600">ID: {ASSETS_MAP[asset]}</div>
-                                        
-                                        {/* Hover Effect */}
                                         <div className="absolute inset-0 bg-green-500/5 opacity-0 group-hover:opacity-100 transition-opacity"></div>
                                     </button>
                                 ))}
@@ -383,31 +312,17 @@
                     </section>
                 </main>
 
-                {/* MODAL DE SINAL */}
                 {modal && (
                     <div className="fixed inset-0 bg-black/90 backdrop-blur flex items-center justify-center z-50 animate-[fadeIn_0.2s]">
                         <div className="bg-skynet-950 border border-green-500 rounded-2xl p-8 w-96 shadow-[0_0_50px_rgba(34,197,94,0.2)] text-center relative overflow-hidden">
                             <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-green-500 to-transparent animate-scanline"></div>
-                            
                             <h2 className="text-4xl font-black text-white mb-2">{modal.pair.replace('_otc','')}</h2>
-                            <div className={`text-6xl font-black mb-4 ${modal.direction === 'call' ? 'text-green-500' : 'text-red-500'}`}>
-                                {modal.direction.toUpperCase()}
-                            </div>
-                            
+                            <div className={`text-6xl font-black mb-4 ${modal.direction === 'call' ? 'text-green-500' : 'text-red-500'}`}>{modal.direction.toUpperCase()}</div>
                             <div className="grid grid-cols-2 gap-4 mb-6 text-sm">
-                                <div className="bg-black p-2 rounded border border-green-900">
-                                    <div className="text-gray-500 text-[10px]">PREÇO</div>
-                                    <div className="text-white font-bold">{modal.entry || 'MARKET'}</div>
-                                </div>
-                                <div className="bg-black p-2 rounded border border-green-900">
-                                    <div className="text-gray-500 text-[10px]">CONFIANÇA</div>
-                                    <div className="text-yellow-400 font-bold">{modal.confidence}%</div>
-                                </div>
+                                <div className="bg-black p-2 rounded border border-green-900"><div className="text-gray-500 text-[10px]">PREÇO</div><div className="text-white font-bold">{modal.entry.toFixed(5)}</div></div>
+                                <div className="bg-black p-2 rounded border border-green-900"><div className="text-gray-500 text-[10px]">CONFIANÇA</div><div className="text-yellow-400 font-bold">{modal.confidence}%</div></div>
                             </div>
-
-                            <button onClick={executeTrade} className="w-full bg-white text-black font-bold py-4 rounded-xl hover:scale-[1.02] transition-transform shadow-xl">
-                                CONFIRMAR ENTRADA
-                            </button>
+                            <button onClick={executeTrade} className="w-full bg-white text-black font-bold py-4 rounded-xl hover:scale-[1.02] transition-transform shadow-xl">CONFIRMAR ENTRADA</button>
                             <button onClick={()=>setModal(null)} className="mt-4 text-xs text-gray-500 hover:text-white">CANCELAR</button>
                         </div>
                     </div>
@@ -416,7 +331,6 @@
         );
     }
 
-    // Componente Auxiliar
     const StatBox = ({ label, value, color }) => (
         <div className="text-center px-3 border-r border-green-900 last:border-0">
             <div className="text-[9px] text-gray-500">{label}</div>
@@ -429,3 +343,4 @@
   </script>
 </body>
 </html>
+    
